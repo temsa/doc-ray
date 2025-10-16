@@ -57,6 +57,7 @@ This project implements an asynchronous document parsing service using Ray Serve
 -   **POST `/submit`**: Submits a document for parsing.
     -   Request Body: `{"document_data": "content of the document"}`
     -   Response: `{"job_id": "unique_job_id", "message": "Document submitted..."}` (Status 202)
+    -   Notes: You can pass optional parser parameters via the `parser_params` form field (JSON string), e.g. `{"formula_enable": true, "table_enable": true, "lang": "en-ie"}`. The `lang` parameter overrides the default OCR language. It also accepts a list for fallback, e.g. `{"lang": ["ga-ie", "en-ie", "uk"]}` — the service tries each language in order and picks the first that yields sufficient OCR content.
 -   **GET `/status/{job_id}`**: Checks the parsing status.
     -   Response: `{"job_id": "unique_job_id", "status": "processing|completed|failed", "error": "error message if failed"}`
 -   **GET `/result/{job_id}`**: Retrieves the parsing result.
@@ -119,25 +120,49 @@ Once the `doc-ray` service is running, you can use the provided `client.py` scri
 
     The service will be accessible at `http://localhost:8639` on your host machine.
 
-### Cluster Mode (CURRENTLY NOT WORKING, TO BE FIXED)
+### Cluster Mode
 
-1.  **Set up a Ray Cluster**:
-    Follow the official Ray documentation to set up a multi-node Ray cluster.
-    (See: [Ray Cluster Setup](https://docs.ray.io/en/latest/cluster/getting-started.html))
+There are two supported paths:
 
-2.  **Deploy the application to the cluster**:
-    Once your Ray cluster is running and your local environment is configured to connect to it (e.g., via `ray.init(address="ray://<head_node_ip>:10001")` or by setting `RAY_ADDRESS`), you can deploy the application using the Ray Serve CLI with the configuration file.
+1) Non-containerized remote Serve (ships code + installs deps)
 
-    Ensure your application code and `serve_config.yaml` are accessible to the machine from where you run the deploy command, or are part of your runtime environment.
+- Ensure your client can connect to the cluster (e.g., `export RAY_ADDRESS=ray://<head_ip>:10001`).
+- Use the provided config that includes a runtime_env to ship code and install Python deps on the cluster:
 
+```bash
+serve run serve_config_cluster.yaml
+```
+
+Notes:
+- This downloads/install deps (incl. Torch) on the cluster nodes; ensure egress is allowed.
+- Models are pulled at runtime via Hugging Face by default. To use cached/local models, set `MINERU_MODEL_SOURCE=local` and ensure `mineru.json` points to local paths.
+
+2) Recommended: Containerized with KubeRay (image includes deps + models)
+
+- Install KubeRay CRDs/controller per Ray docs.
+- Apply the RayService manifest that uses the published image (includes all dependencies and models):
+
+```bash
+kubectl apply -f kubernetes/rayservice.yaml
+```
+
+- Access the Serve HTTP endpoint (port 8639):
+  - Port-forward the head pod:
     ```bash
-    # Example: If connecting to a running Ray cluster
-    # Ensure your context points to the cluster head.
-    # Then, from the doc_parser_service directory:
-    serve run serve_config.yaml
+    kubectl get pods -l ray.io/node-type=head
+    kubectl port-forward <head-pod-name> 8639:8639
     ```
-    This command submits the application defined in `serve_config.yaml` to the connected Ray cluster. The `JobStateManager` actor will ensure that state is shared across the cluster, and Ray Serve will handle routing requests to appropriate replicas.
+  - Or create a Service/Ingress that exposes port 8639.
 
-    For robust cluster deployment, consider:
-    - Packaging your application code and dependencies into a runtime environment (`working_dir` or `py_modules` with a requirements file) specified in your Serve config or when connecting to Ray. The Docker image itself can also be used as a basis for nodes in a Kubernetes-based Ray cluster (e.g., using KubeRay).
-    - Configuring `num_replicas`, CPU/GPU resources, and other deployment options in `serve_config.yaml` or directly in the `app.main.py` deployment definition for production needs.
+Tuning/Env:
+- `PARSER_FORCE_GPU_PER_REPLICA` to request GPUs per replica (e.g., `1`).
+- `PARSER_NUM_CPUS_PER_REPLICA` to bound CPU use; by default Ray decides.
+- `MINERU_LANG` default OCR language or fallback list used when the request does not specify `lang`. Accepts a single code (e.g., `en-ie`) or a comma-separated / JSON array (e.g., `ga-ie,en-ie,uk` or `["ga-ie","en-ie","uk"]`).
+- `MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS` minimum markdown characters needed to accept a language when OCR is enabled (default: `200`).
+- `MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS_PARTIAL` same threshold for partial-page parsing (default: `50`).
+- `MINERU_LANG_SELECTION_TEST_PAGES` number of pages to sample when selecting a language before parallel parsing (default: `3`).
+- `MINERU_CONFIG_JSON` (`/mineru/mineru.json` in the image) and `MINERU_MODEL_SOURCE` (`local` in image).
+
+Additional notes:
+- `serve_config.yaml` is intended for use inside the container image where the code and deps are already present. For remote clusters without the image, use `serve_config_cluster.yaml`.
+- To build and push images for your registry/cluster, use `make build-and-push-multiarch REGISTRY=<your-registry>/ IMAGE_NAME=<repo/name> IMAGE_TAG=<tag>` and update `kubernetes/rayservice.yaml` accordingly.

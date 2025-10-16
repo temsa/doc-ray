@@ -1,0 +1,30 @@
+# Ray Serve configuration for remote clusters (non-container nodes)
+# Ships code and installs Python deps via runtime_env.
+
+http_options:
+  host: "0.0.0.0"
+  port: 8639
+
+applications:
+  - name: doc_parser
+    import_path: app.main:entrypoint
+    route_prefix: /
+    runtime_env:
+      working_dir: .
+      env_vars:
+        MINERU_CONFIG_JSON: "./mineru.json"
+        MINERU_MODEL_SOURCE: "huggingface"
+        # Default OCR language(s). Accepts a single code or a comma-separated / JSON array list for fallback.
+        # Example below tries Irish first, then English, then Ukrainian.
+        MINERU_LANG: "ga-ie,en-ie,uk"
+      pip:
+        - ray[serve]==2.46.0
+        - fastapi
+        - python-multipart>=0.0.20
+        - grpcio==1.64.1
+        - memray>=1.17.2
+        - mineru[core]>=2.0.6
+        - pillow>=11.2.1
+        - pymupdf==1.26.1
+        - pypdfium2
+        - torch

@@ -1,0 +1,60 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: doc-ray-service
+  namespace: default
+spec:
+  serveConfig:
+    applications:
+      - name: doc_parser
+        import_path: app.main:entrypoint
+        route_prefix: /
+        runtime_env:
+          env_vars:
+            MINERU_CONFIG_JSON: "/mineru/mineru.json"
+            MINERU_MODEL_SOURCE: "local"
+  rayClusterConfig:
+    rayVersion: "2.46.0"
+    headGroupSpec:
+      serviceType: ClusterIP
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: apecloud/doc-ray:latest
+              imagePullPolicy: IfNotPresent
+              ports:
+                - containerPort: 8265 # Ray Dashboard
+                - containerPort: 8639 # Ray Serve HTTP
+              env:
+                - name: RAY_DISABLE_USAGE_STATS
+                  value: "1"
+              # Optional resource requests/limits
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: "2Gi"
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+    workerGroupSpecs:
+      - groupName: workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 3
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: apecloud/doc-ray:latest
+                imagePullPolicy: IfNotPresent
+                env:
+                  - name: RAY_DISABLE_USAGE_STATS
+                    value: "1"
+                resources:
+                  requests:
+                    cpu: "2"
+                    memory: "4Gi"
+                  limits:
+                    cpu: "4"
+                    memory: "8Gi"
