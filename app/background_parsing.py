@@ -46,6 +46,7 @@ class BackgroundParsingActor:
                 filename=filename,
                 formula_enable=parser_params.get("formula_enable", True),
                 table_enable=parser_params.get("table_enable", True),
+                lang=parser_params.get("lang"),
             )
             end_time = time.time()
             parsing_duration = end_time - start_time
@@ -100,6 +101,28 @@ class BackgroundParsingActor:
             document_content_bytes = None  # Release original memory
             actor_logger.info(f"Job {job_id}: Sanitized PDF, total pages: {page_count}")
 
+            # Choose language once for the whole document using a small sample
+            try:
+                candidate_langs = mineru._normalize_lang_candidates(
+                    parser_params.get("lang"), os.getenv("MINERU_LANG")
+                )
+                test_pages = int(os.getenv("MINERU_LANG_SELECTION_TEST_PAGES", "3"))
+                chosen_lang = mineru.select_best_language(
+                    sanitized_pdf_bytes,
+                    filename,
+                    candidate_langs,
+                    test_pages=min(test_pages, page_count) if page_count > 0 else 1,
+                    formula_enable=parser_params.get("formula_enable", True),
+                    table_enable=parser_params.get("table_enable", True),
+                )
+                actor_logger.info(f"Selected OCR language for document: {chosen_lang}")
+            except Exception as e:
+                actor_logger.error(
+                    f"Language selection failed; falling back to default. Error: {e}",
+                    exc_info=True,
+                )
+                chosen_lang = None  # Let downstream pick via env/default
+
             # 2. Submit parsing tasks in batches, using ray.wait() to control concurrency.
             batch_size = int(
                 os.getenv("PARALLEL_PARSING_BATCH_SIZE", str(_PAGES_PER_BATCH))
@@ -116,6 +139,7 @@ class BackgroundParsingActor:
                     end_page_idx=end_page_idx,
                     formula_enable=parser_params.get("formula_enable", True),
                     table_enable=parser_params.get("table_enable", True),
+                    lang=chosen_lang if isinstance(chosen_lang, str) else parser_params.get("lang"),
                 )
                 pending_refs.append(ref)
                 all_refs.append(ref)

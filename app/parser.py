@@ -46,6 +46,7 @@ class DocumentParser:
         end_page_idx=None,
         formula_enable=True,
         table_enable=True,
+        lang: str | list[str] | None = None,
     ) -> dict:
         replica_context = serve.get_replica_context()
         logger.info(f"Replica {replica_context.replica_id} received parse request.")
@@ -58,6 +59,7 @@ class DocumentParser:
                 end_page_idx,
                 formula_enable,
                 table_enable,
+                lang=lang,
             )
             logger.info(f"Replica {replica_context.replica_id} completed parse.")
 

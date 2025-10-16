@@ -11,7 +11,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from hashlib import md5
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import fitz
 import pypdfium2 as pdfium
@@ -87,6 +87,155 @@ class MinerUParser:
 
         _monkey_patch_mineru()
 
+    @staticmethod
+    def _normalize_lang_candidates(param_lang: Any, env_lang: str | None) -> list[str]:
+        """
+        Normalize language candidates from request param or environment.
+        Accepts:
+          - list/tuple of strings
+          - JSON array string
+          - comma-separated string
+          - single string
+        Falls back to legacy default 'ch'.
+        """
+        candidates: list[str] = []
+
+        def _extend_from_value(val: Any):
+            nonlocal candidates
+            if val is None:
+                return
+            if isinstance(val, (list, tuple)):
+                for v in val:
+                    if isinstance(v, str) and v.strip():
+                        candidates.append(v.strip())
+                return
+            if isinstance(val, str):
+                s = val.strip()
+                if not s:
+                    return
+                # Try JSON array
+                if (s.startswith("[") and s.endswith("]")):
+                    try:
+                        arr = json.loads(s)
+                        if isinstance(arr, list):
+                            for v in arr:
+                                if isinstance(v, str) and v.strip():
+                                    candidates.append(v.strip())
+                            return
+                    except Exception:
+                        pass
+                # Try comma-separated
+                if "," in s:
+                    for v in s.split(","):
+                        if v.strip():
+                            candidates.append(v.strip())
+                    return
+                # Single token
+                candidates.append(s)
+
+        _extend_from_value(param_lang)
+        if not candidates:
+            _extend_from_value(env_lang)
+        if not candidates:
+            candidates = ["ch"]
+        # Deduplicate preserving order
+        seen = set()
+        uniq: list[str] = []
+        for c in candidates:
+            if c not in seen:
+                uniq.append(c)
+                seen.add(c)
+        return uniq
+
+    @staticmethod
+    def _accept_lang_for_result(ocr_enable: bool, markdown_text: str, is_partial: bool) -> bool:
+        """Decide whether a language attempt is acceptable.
+        If OCR is not enabled per MinerU classify(), accept immediately because language won't affect non-OCR path.
+        Otherwise require a minimum markdown size. Thresholds can be tuned via env:
+          - MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS (default 200)
+          - MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS_PARTIAL (default 50)
+        """
+        if not ocr_enable:
+            return True
+        try:
+            if is_partial:
+                threshold = int(os.getenv("MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS_PARTIAL", "50"))
+            else:
+                threshold = int(os.getenv("MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS", "200"))
+        except ValueError:
+            threshold = 200 if not is_partial else 50
+        return len(markdown_text.strip()) >= threshold
+
+    def select_best_language(
+        self,
+        data: bytes,
+        filename: str,
+        candidate_langs: Iterable[str],
+        *,
+        test_pages: int = 3,
+        formula_enable: bool = True,
+        table_enable: bool = True,
+    ) -> str:
+        """Pick the first language that yields acceptable quality on a small sample of pages.
+        Returns the chosen language. If none meet the threshold, returns the first candidate.
+        """
+        self._prepare()
+        try:
+            pdf_bytes, page_count = self.sanitize_pdf(data, filename)
+        except Exception:
+            # If sanitize fails, just use the first candidate
+            for lang in candidate_langs:
+                return lang
+            return "ch"
+
+        if page_count <= 0:
+            for lang in candidate_langs:
+                return lang
+            return "ch"
+        end_idx = max(0, min(test_pages - 1, page_count - 1))
+        sample_pdf_bytes = sanitize_pdf(pdf_bytes, 0, end_idx)
+
+        for lang in candidate_langs:
+            try:
+                from mineru.backend.pipeline.model_json_to_middle_json import (
+                    result_to_middle_json,
+                )
+                from mineru.backend.pipeline.pipeline_analyze import doc_analyze
+
+                logger.info(f"Language selection: trying '{lang}' on sample pages 0..{end_idx}")
+                result = doc_analyze(
+                    [sample_pdf_bytes],
+                    [lang],
+                    formula_enable=formula_enable,
+                    table_enable=table_enable,
+                )
+                infer_result = result[0][0]
+                images_list = result[1][0]
+                pdf_doc = result[2][0]
+                _lang = result[3][0]
+                _ocr_enable = result[4][0]
+
+                middle_json = result_to_middle_json(
+                    infer_result, images_list, pdf_doc, None, _lang, _ocr_enable
+                )
+                markdown = self.middle_json_to_markdown(middle_json, image_dir_name)
+                if self._accept_lang_for_result(_ocr_enable, markdown, is_partial=True):
+                    logger.info(f"Language selection: accepted '{lang}' for document")
+                    return lang
+                else:
+                    logger.info(
+                        f"Language selection: rejected '{lang}' due to low content (len={len(markdown.strip())})"
+                    )
+            except Exception:
+                logger.exception(f"Language selection failed for '{lang}'")
+                continue
+
+        # Fallback to first candidate if none accepted
+        for lang in candidate_langs:
+            logger.info(f"Language selection: falling back to first candidate '{lang}'")
+            return lang
+        return "ch"
+
     def _prepare(self):
         if self.prepared:
             return
@@ -116,6 +265,7 @@ class MinerUParser:
         end_page_idx=None,
         formula_enable=True,
         table_enable=True,
+        lang: str | list[str] | None = None,
     ) -> ParseResult:
         self._prepare()
 
@@ -146,56 +296,80 @@ class MinerUParser:
                 formula_enable = False
                 table_enable = False
 
-            pdf_bytes_list = [pdf_data]
-            lang_list = ["ch"]
-            result = doc_analyze(
-                pdf_bytes_list,
-                lang_list,
-                formula_enable=formula_enable,
-                table_enable=table_enable,
-            )
+            # Normalize candidate languages from param and env
+            env_lang = os.getenv("MINERU_LANG")
+            candidate_langs = self._normalize_lang_candidates(lang, env_lang)
+            is_partial = not (start_page_idx is None and end_page_idx is None)
 
-            infer_result = result[0][0]
-            images_list = result[1][0]
-            pdf_doc = result[2][0]
-            _lang = result[3][0]
-            _ocr_enable = result[4][0]
+            last_result: ParseResult | None = None
+            for chosen_lang in candidate_langs:
+                logger.info(f"Attempting parse with OCR language: {chosen_lang}")
 
-            local_image_dir = os.path.join(
-                temp_dir, md5(filename.encode("utf-8")).hexdigest(), image_dir_name
-            )
-            os.makedirs(local_image_dir, exist_ok=True)
-            image_writer = FileBasedDataWriter(local_image_dir)
+                pdf_bytes_list = [pdf_data]
+                lang_list = [chosen_lang]
+                result = doc_analyze(
+                    pdf_bytes_list,
+                    lang_list,
+                    formula_enable=formula_enable,
+                    table_enable=table_enable,
+                )
 
-            middle_json = result_to_middle_json(
-                infer_result, images_list, pdf_doc, image_writer, _lang, _ocr_enable
-            )
-            if start_page_idx is None and end_page_idx is None:
-                # Hack: do para_split() and other processing only when parsing the whole PDF file.
-                global _orig_para_split
-                if _orig_para_split is not None:
-                    _orig_para_split(middle_json.get("pdf_info", []))
-                adjust_title_level(pdf_data, middle_json)
-                add_merged_text_field(middle_json)
-            middle_json_str = json.dumps(middle_json, ensure_ascii=False)
+                infer_result = result[0][0]
+                images_list = result[1][0]
+                pdf_doc = result[2][0]
+                _lang = result[3][0]
+                _ocr_enable = result[4][0]
 
-            images_dict = {}
-            if os.path.exists(local_image_dir) and os.listdir(local_image_dir):
-                for root, _, files in os.walk(local_image_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        with open(file_path, "rb") as f:
-                            name = f"images/{file}"
-                            images_dict[name] = base64.b64encode(f.read()).decode()
+                local_image_dir = os.path.join(
+                    temp_dir, md5(filename.encode("utf-8")).hexdigest(), image_dir_name
+                )
+                os.makedirs(local_image_dir, exist_ok=True)
+                image_writer = FileBasedDataWriter(local_image_dir)
 
-            result = ParseResult(
-                markdown=self.middle_json_to_markdown(middle_json, image_dir_name),
-                middle_json=_sanitize_string_for_utf8(middle_json_str),
-                images=images_dict,
-            )
-            if start_page_idx is None:
-                result.pdf_data = pdf_data
-            return result
+                middle_json = result_to_middle_json(
+                    infer_result, images_list, pdf_doc, image_writer, _lang, _ocr_enable
+                )
+                if start_page_idx is None and end_page_idx is None:
+                    # Hack: do para_split() and other processing only when parsing the whole PDF file.
+                    global _orig_para_split
+                    if _orig_para_split is not None:
+                        _orig_para_split(middle_json.get("pdf_info", []))
+                    adjust_title_level(pdf_data, middle_json)
+                    add_merged_text_field(middle_json)
+                middle_json_str = json.dumps(middle_json, ensure_ascii=False)
+
+                images_dict = {}
+                if os.path.exists(local_image_dir) and os.listdir(local_image_dir):
+                    for root, _, files in os.walk(local_image_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            with open(file_path, "rb") as f:
+                                name = f"images/{file}"
+                                images_dict[name] = base64.b64encode(f.read()).decode()
+
+                this_result = ParseResult(
+                    markdown=self.middle_json_to_markdown(middle_json, image_dir_name),
+                    middle_json=_sanitize_string_for_utf8(middle_json_str),
+                    images=images_dict,
+                )
+                if start_page_idx is None:
+                    this_result.pdf_data = pdf_data
+
+                last_result = this_result
+
+                if self._accept_lang_for_result(_ocr_enable, this_result.markdown, is_partial):
+                    logger.info(f"Selected OCR language: {chosen_lang}")
+                    return this_result
+                else:
+                    logger.info(
+                        f"Rejecting OCR language '{chosen_lang}', insufficient content length={len(this_result.markdown.strip())}"
+                    )
+
+            # Fallback: return the last attempt if none accepted
+            if last_result is not None:
+                logger.info("All OCR language candidates rejected; returning last attempt result.")
+                return last_result
+            raise RuntimeError("No language candidates available for parsing")
         except:
             logger.exception("MinerUParser failed")
             raise
