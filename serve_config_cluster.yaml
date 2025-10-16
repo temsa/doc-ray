@@ -14,6 +14,9 @@ applications:
       env_vars:
         MINERU_CONFIG_JSON: "./mineru.json"
         MINERU_MODEL_SOURCE: "huggingface"
+        # Default OCR language(s). Accepts a single code or a comma-separated / JSON array list for fallback.
+        # Example below tries Irish first, then English, then Ukrainian.
+        MINERU_LANG: "ga-ie,en-ie,uk"
       pip:
         - ray[serve]==2.46.0
         - fastapi
