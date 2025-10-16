@@ -16,7 +16,9 @@ ENV HF_HOME=${MODELS_CACHE_PATH} \
     MODELSCOPE_CACHE=${MODELS_CACHE_PATH}
 RUN mkdir -p ${HF_HOME} # Ensure the cache directory exists
 
-RUN pip install --no-cache-dir huggingface_hub modelscope mineru
+# Pin MinerU version to match runtime to ensure model compatibility
+ARG MINERU_VERSION="2.5.4"
+RUN pip install --no-cache-dir huggingface_hub modelscope "mineru==${MINERU_VERSION}"
 RUN mineru-models-download -s ${MODEL_SOURCE} -m pipeline && cp ~/mineru.json /app
 
 FROM scratch
