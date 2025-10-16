@@ -57,6 +57,7 @@ This project implements an asynchronous document parsing service using Ray Serve
 -   **POST `/submit`**: Submits a document for parsing.
     -   Request Body: `{"document_data": "content of the document"}`
     -   Response: `{"job_id": "unique_job_id", "message": "Document submitted..."}` (Status 202)
+    -   Notes: You can pass optional parser parameters via the `parser_params` form field (JSON string), e.g. `{"formula_enable": true, "table_enable": true, "lang": "en-ie"}`. The `lang` parameter overrides the default OCR language. It also accepts a list for fallback, e.g. `{"lang": ["ga-ie", "en-ie", "uk"]}` — the service tries each language in order and picks the first that yields sufficient OCR content.
 -   **GET `/status/{job_id}`**: Checks the parsing status.
     -   Response: `{"job_id": "unique_job_id", "status": "processing|completed|failed", "error": "error message if failed"}`
 -   **GET `/result/{job_id}`**: Retrieves the parsing result.
@@ -156,6 +157,10 @@ kubectl apply -f kubernetes/rayservice.yaml
 Tuning/Env:
 - `PARSER_FORCE_GPU_PER_REPLICA` to request GPUs per replica (e.g., `1`).
 - `PARSER_NUM_CPUS_PER_REPLICA` to bound CPU use; by default Ray decides.
+- `MINERU_LANG` default OCR language or fallback list used when the request does not specify `lang`. Accepts a single code (e.g., `en-ie`) or a comma-separated / JSON array (e.g., `ga-ie,en-ie,uk` or `["ga-ie","en-ie","uk"]`).
+- `MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS` minimum markdown characters needed to accept a language when OCR is enabled (default: `200`).
+- `MINERU_LANG_FALLBACK_MIN_MARKDOWN_CHARS_PARTIAL` same threshold for partial-page parsing (default: `50`).
+- `MINERU_LANG_SELECTION_TEST_PAGES` number of pages to sample when selecting a language before parallel parsing (default: `3`).
 - `MINERU_CONFIG_JSON` (`/mineru/mineru.json` in the image) and `MINERU_MODEL_SOURCE` (`local` in image).
 
 Additional notes:

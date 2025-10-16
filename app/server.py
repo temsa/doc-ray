@@ -87,7 +87,11 @@ class ServeController:
         file: UploadFile = File(...),
         parser_params: str = Form(
             "{}",
-            description="A JSON string of parameters for the parser, e.g., '{\"formula_enable\": false}'.",
+            description=(
+                "A JSON string of parameters for the parser, e.g., '{\\"formula_enable\\": true, "+
+                "\\"table_enable\\": true, \\\"lang\\\": \\\"en-ie\\\"}'. The 'lang' field also "+
+                "supports a list for fallback, e.g., '{\\"lang\\": [\\"ga-ie\\", \\\"en-ie\\", \\\"uk\\"]}'."
+            ),
         ),
     ):
         """

@@ -166,7 +166,10 @@ def main():
         "--parser-params",
         type=str,
         default="{}",
-        help="A JSON string of parameters for the parser, e.g., '{\"formula_enable\": false}'.",
+        help=(
+            "A JSON string of parameters for the parser, e.g., "
+            "'{\"formula_enable\": true, \"table_enable\": true, \"lang\": [\"ga-ie\", \"en-ie\", \"uk\"]}'."
+        ),
     )
     parser.add_argument(
         "--dump-middle-json",
