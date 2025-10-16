@@ -1,4 +1,4 @@
-# Ray Serve configuration file
+# Ray Serve configuration file (for use inside the container image)
 
 # Global settings for the Ray Serve instance
 http_options:
@@ -11,6 +11,7 @@ http_options:
 applications:
   - name: doc_parser
     import_path: app.main:entrypoint # Points to the bound ServeController instance
+    # For remote clusters without this repo/image present, use serve_config_cluster.yaml
     route_prefix: / # Optional: if you want to serve this app under a specific path like /parser
 
 # Example of how to define actors that should be running.
