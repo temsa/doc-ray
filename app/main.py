@@ -40,14 +40,21 @@ def get_ray_actor_options_based_on_gpu_availability(
     """
     ray_actor_options = {
         "num_cpus": int(os.getenv("PARSER_NUM_CPUS_PER_REPLICA", "0")),
-        "memory": int(
-            os.getenv("PARSER_MEMORY_PER_REPLICA", str(5 * 1024 * 1024 * 1024))
-        ),  # Default 5GB
     }
+    # Memory reservation is optional in cluster mode to avoid unschedulable replicas.
+    mem_str = os.getenv("PARSER_MEMORY_PER_REPLICA")
+    if mem_str:
+        try:
+            ray_actor_options["memory"] = int(mem_str)
+        except ValueError:
+            logger.warning(
+                "Invalid value for PARSER_MEMORY_PER_REPLICA: '%s'. Ignoring.",
+                mem_str,
+            )
 
     if is_standalone_mode():
         # Ignore memory requirement for standalone mode
-        del ray_actor_options["memory"]
+        ray_actor_options.pop("memory", None)
 
     # Allow overriding via environment variable for explicit control
     # PARSER_FORCE_GPU_PER_REPLICA: "0", "0.25", "1"
