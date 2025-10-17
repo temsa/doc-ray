@@ -30,7 +30,8 @@ COPY uv.lock ./
 
 # Install dependencies using uv.
 # --no-cache to reduce image size
-RUN uv sync --no-cache
+# Use the checked-in lockfile without re-resolving to avoid pulling CUDA variants
+RUN uv sync --no-cache --frozen
 
 # Activate the virtual environment by setting PATH and VIRTUAL_ENV.
 # This ensures that subsequent commands use the Python interpreter and packages from this venv.

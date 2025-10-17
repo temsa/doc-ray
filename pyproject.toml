@@ -24,4 +24,14 @@ misc = [
 [tool.uv]
 # Add any uv specific configurations here if needed
 # For example, if you want to specify a particular version of a tool
-# tool.uv.sources = { some-package = "==1.2.3" }
+# Force CPU-only PyTorch wheels in all environments (avoids CUDA split packages in containers)
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
